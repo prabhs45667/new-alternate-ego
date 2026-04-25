@@ -1,4 +1,4 @@
-<![CDATA[<div align="center">
+<div align="center">
 
 # 🧠 Alternate Ego
 
@@ -600,4 +600,3 @@ This gives the RAG brain **2.25× more personality data** to work with.
 **Total Cost: ₹0** · **Everything Runs Locally** · **Zero External API Dependencies**
 
 </div>
-]]>
