@@ -578,15 +578,7 @@ The original Ego used 4 questions. We expanded to 9 to capture:
 
 This gives the RAG brain **2.25× more personality data** to work with.
 
----
 
-## 👥 Team
-
-**Project:** Alternate Ego / Drishya AI  
-**Type:** Academic / Research Project  
-**Inspired by:** [Ego](https://sg.linkedin.com/in/kwokzhengfeng) — 3rd Place, Cursor × Smithery Hackathon, Singapore
-
----
 
 <div align="center">
 
