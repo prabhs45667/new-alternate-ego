@@ -1,0 +1,194 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.pyo
+.hypothesis/
+.pytest_cache/
+pytestdebuglog.txt
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the Python version is
+#   usually handled by the user. Everything else can be ignored.
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#1255, lock files are meant to be committed.
+#   If you truly want to ignore them, uncomment the following line:
+# Pipfile.lock
+
+# poetry
+#   Similar to Pipfile.lock, poetry.lock is meant to be committed.
+#   poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, pdm.lock is meant to be committed.
+# pdm.lock
+#   pdm envs are also ignored by default
+.pdm-python
+
+# PEP 582; used by e.g. github.com/davidhalter/jedi
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# MacOS
+.DS_Store
+
+# Project Specific
+*.resolved
+AI_digital_twin_*.mp4
+VID-*.mp4
+screenshots/
+screenshots-a/
+screenshots-b/
+screenshots2/
+promo-video/
+storage/
+logs/
+temp/
+outputs/
+results/
+checkpoint/
+checkpoints/
+
+# Ignore large media/weights if not tracked by LFS
+*.weights
+*.pth
+*.h5
+*.t7
+*.pkl
+*.model
+
+# Voice Backups
+voice_backups/
+
+# Documentation archives
+docs/
+
+# Heavy ML repos (external tools)
+Wav2Lip/
+SadTalker/
+lora_output/
+wav2lip-env/
+
+# Built landing page (regenerated from ego-echo-forge-main)
+alternate-ego/frontend/public/landing/

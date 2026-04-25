@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Sora:wght@600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 230 40% 4%;
+    --foreground: 220 30% 96%;
+
+    --card: 230 35% 8%;
+    --card-foreground: 220 30% 96%;
+
+    --popover: 230 35% 8%;
+    --popover-foreground: 220 30% 96%;
+
+    --primary: 270 95% 65%;
+    --primary-foreground: 230 40% 4%;
+    --primary-glow: 280 100% 75%;
+
+    --secondary: 190 95% 55%;
+    --secondary-foreground: 230 40% 4%;
+
+    --accent: 320 90% 60%;
+    --accent-foreground: 230 40% 4%;
+
+    --muted: 230 25% 14%;
+    --muted-foreground: 220 15% 70%;
+
+    --destructive: 0 85% 60%;
+    --destructive-foreground: 220 30% 96%;
+
+    --border: 230 30% 18%;
+    --input: 230 30% 14%;
+    --ring: 270 95% 65%;
+
+    --radius: 1rem;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(270 95% 65%), hsl(320 90% 60%), hsl(190 95% 55%));
+    --gradient-aurora: radial-gradient(ellipse at top, hsl(270 95% 35% / 0.4), transparent 50%),
+                       radial-gradient(ellipse at bottom right, hsl(320 90% 40% / 0.3), transparent 50%),
+                       radial-gradient(ellipse at bottom left, hsl(190 95% 35% / 0.3), transparent 50%);
+    --gradient-glass: linear-gradient(135deg, hsl(230 40% 30% / 0.25), hsl(230 40% 10% / 0.15));
+
+    /* Shadows / Glows */
+    --shadow-glow: 0 0 60px hsl(270 95% 65% / 0.4);
+    --shadow-card: 0 10px 40px -10px hsl(270 95% 30% / 0.5);
+
+    --sidebar-background: 230 40% 6%;
+    --sidebar-foreground: 220 30% 96%;
+    --sidebar-primary: 270 95% 65%;
+    --sidebar-primary-foreground: 230 40% 4%;
+    --sidebar-accent: 230 30% 14%;
+    --sidebar-accent-foreground: 220 30% 96%;
+    --sidebar-border: 230 30% 18%;
+    --sidebar-ring: 270 95% 65%;
+  }
+
+  .dark { /* same as root - dark by default */ }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', sans-serif;
+    background-image: var(--gradient-aurora);
+    background-attachment: fixed;
+  }
+  h1, h2, h3, h4 { font-family: 'Sora', sans-serif; letter-spacing: -0.02em; }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-xl border border-white/10;
+    background: var(--gradient-glass);
+    box-shadow: 0 8px 32px hsl(230 40% 2% / 0.4), inset 0 1px 0 hsl(0 0% 100% / 0.1);
+  }
+  .glass-strong {
+    @apply backdrop-blur-2xl border border-white/15 bg-white/5;
+    box-shadow: 0 20px 60px hsl(230 40% 2% / 0.5), inset 0 1px 0 hsl(0 0% 100% / 0.15);
+  }
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .glow {
+    box-shadow: var(--shadow-glow);
+  }
+  .grain::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: 0.04;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+}
+
+@layer utilities {
+  .perspective { perspective: 1200px; }
+  .preserve-3d { transform-style: preserve-3d; }
+  .backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .rotate-y-180 { transform: rotateY(180deg); }
+}
