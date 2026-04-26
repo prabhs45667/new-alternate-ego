@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "nomic-embed-text"
     
     # Voice Pipeline
-    WHISPER_MODEL: str = "base"
+    WHISPER_MODEL: str = "small"
     USE_COQUI: bool = True
     EDGE_TTS_VOICE: str = "en-US-GuyNeural"
     

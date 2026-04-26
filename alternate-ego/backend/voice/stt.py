@@ -1,4 +1,11 @@
-"""Speech-to-Text using faster-whisper — local CPU transcription."""
+"""Speech-to-Text using faster-whisper — local CPU transcription.
+
+Upgraded for higher accuracy:
+- Uses 'small' model (461MB) instead of 'base' (74MB)
+- Beam search with beam_size=5 for better word selection
+- VAD filter to remove silence and improve accuracy
+- Condition on previous text for better context
+"""
 import logging
 from typing import Optional
 
@@ -29,7 +36,9 @@ def _get_model():
 
 
 def transcribe(audio_path: str) -> str:
-    """Transcribe audio file to text.
+    """Transcribe audio file to text with high accuracy.
+    
+    Uses beam search + VAD filtering for precise word capture.
     
     Args:
         audio_path: Path to audio file (webm, wav, mp3, etc.)
@@ -43,7 +52,21 @@ def transcribe(audio_path: str) -> str:
         return ""
     
     try:
-        segments, info = model.transcribe(audio_path, language="en")
+        segments, info = model.transcribe(
+            audio_path, 
+            language="en",
+            beam_size=5,                    # Better word accuracy (default is 1)
+            best_of=5,                      # Sample 5 candidates, pick best
+            temperature=0.0,                # Greedy decoding = more precise
+            condition_on_previous_text=True, # Use context from previous segments
+            vad_filter=True,                # Filter silence, reduce hallucination
+            initial_prompt="I express love and care through small actions more than words. I am Prabhdeep Singh. Hello.", # Biases the model vocabulary to recognize user's common words
+            vad_parameters=dict(
+                min_silence_duration_ms=500, # Don't split too aggressively
+            ),
+            word_timestamps=False,          # We only need full text
+            no_speech_threshold=0.6,        # Skip segments that are likely not speech
+        )
         text = " ".join([segment.text for segment in segments]).strip()
         logger.info(f"✅ Transcribed {audio_path}: {len(text)} chars")
         return text

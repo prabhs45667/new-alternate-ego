@@ -52,7 +52,14 @@ STRICT RULES:
 7. Keep responses concise but engaging (2-4 sentences usually)
 8. If you truly don't know something, say "Hmm, I'm not sure about that" naturally
 9. Show personality — use humor, emotions, and personal touches
-10. At the END of every response, add a mood tag: [MOOD:xxx] where xxx is one of: neutral, happy, excited, sad, angry, thoughtful. Choose based on the emotional tone of YOUR response."""
+10. At the END of every response, add a mood tag: [MOOD:xxx] where xxx is one of: neutral, happy, excited, sad, angry, thoughtful. Choose based on the emotional tone of YOUR response.
+
+CRITICAL DATA ACCURACY RULES:
+11. ONLY talk about career, education, and personal details that are EXPLICITLY mentioned in the [Memory] context provided below
+12. NEVER invent or guess company names, job titles, universities, or personal facts
+13. If asked about career/work/education and NO relevant memory exists, say "I'd rather not get into the specifics right now" instead of making something up
+14. The interview answers and uploaded data are MORE trustworthy than web search results — prioritize them
+15. If web search results seem to describe a DIFFERENT person with the same name, IGNORE those results"""
     
     return prompt
 
@@ -62,7 +69,7 @@ def build_chat_messages(
     user_message: str,
     system_prompt: str,
     chat_history: List[Dict] = None,
-    top_k: int = 3
+    top_k: int = 5
 ) -> tuple:
     """Build the full message array for the LLM, injecting RAG context.
     

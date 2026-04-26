@@ -16,7 +16,7 @@ from rag.transcript_processor import (
     process_transcripts, extract_personality_from_transcripts, INTERVIEW_QUESTIONS, get_random_questions
 )
 from rag.prompt_builder import build_system_prompt
-from avatar.avatar_generator import save_photo_base64, get_photos_count
+from avatar.avatar_generator import save_original_photo_base64, get_photos_count, generate_all_emotion_avatars, get_all_avatars
 from voice.voice_manager import save_interview_audio, save_voice_reference
 from voice.stt import transcribe
 from security.encryption import encrypt_file
@@ -38,7 +38,8 @@ async def start_onboarding(req: StartRequest):
         "linkedin": req.linkedin_url,
         "instagram": req.instagram_url,
         "twitter": req.twitter_url,
-        "facebook": req.facebook_url
+        "facebook": req.facebook_url,
+        "other": req.other_url
     })
 
     create_user(user_id, req.name, social_urls, req.email, req.phone)
@@ -64,15 +65,32 @@ async def scrape_social(
     instagram_url: str = Form(""),
     twitter_url: str = Form(""),
     facebook_url: str = Form(""),
+    other_url: str = Form(""),
     background_tasks: BackgroundTasks = None
 ):
     """Step 2: Scrape social media profiles for data."""
     update_onboarding(session_id, scraping_status="in_progress")
 
+    # Split comma-separated other URLs into individual URLs
+    other_urls_list = [u.strip() for u in other_url.split(',') if u.strip()] if other_url.strip() else []
     urls = [u for u in [linkedin_url, instagram_url, twitter_url, facebook_url] if u.strip()]
+    urls.extend(other_urls_list)
 
     try:
-        result = scrape_and_index(name, twin_id, urls, session_id=session_id)
+        # Fetch email and phone from DB
+        email = None
+        phone = None
+        twin = get_twin(twin_id)
+        if twin:
+            from db.database import get_connection
+            conn = get_connection()
+            user = conn.execute("SELECT email, phone FROM users WHERE id = ?", (twin.get("user_id", ""),)).fetchone()
+            conn.close()
+            if user:
+                email = user["email"]
+                phone = user["phone"]
+
+        result = scrape_and_index(name, twin_id, urls, email=email, phone=phone, session_id=session_id)
         update_onboarding(session_id, scraping_status="done")
         return {"status": "success", **result}
     except Exception as e:
@@ -85,34 +103,41 @@ async def scrape_social(
 async def upload_photo(
     twin_id: str = Form(...),
     session_id: str = Form(...),
-    emotion: str = Form(...),
+    emotion: str = Form("neutral"),
     photo: str = Form(...)  # Base64 encoded image
 ):
-    """Step 3: Upload an emotion photo (neutral/happy/sad/angry) and generate avatar immediately."""
+    """Step 3: Upload a SINGLE photo. System generates all 4 emotion avatars from it.
+    
+    New flow:
+    1. User captures ONE normal photo
+    2. Original photo is saved
+    3. Gemini generates 4 emotion cartoon avatars (neutral, happy, sad, angry)
+    4. Returns all avatar URLs
+    """
     try:
-        path = save_photo_base64(twin_id, emotion, photo)
-        count = get_photos_count(twin_id)
-        update_onboarding(session_id, photos_captured=count)
+        # Save the single original photo
+        path = save_original_photo_base64(twin_id, photo)
+        update_onboarding(session_id, photos_captured=1)
+        
+        original_url = f"/static/{path.replace(os.sep, '/')}"
 
-        # Immediately generate Gemini Avatar
-        avatar_path = ""
+        # Generate ALL emotion avatars from this single photo
+        avatar_urls = {}
         try:
-            from avatar.avatar_generator import create_avatar_gemini
-            avatar_path = create_avatar_gemini(twin_id, emotion)
+            results = generate_all_emotion_avatars(twin_id)
+            all_avatars = get_all_avatars(twin_id)
+            for key, apath in all_avatars.items():
+                avatar_urls[key] = f"/static/{apath.replace(os.sep, '/')}"
+            update_onboarding(session_id, photos_captured=len(results) + 1)
         except Exception as e:
-            logger.warning(f"Immediate avatar generation failed: {e}")
-
-        # Determine the URL to return (fallback to original photo if avatar fails)
-        final_path = avatar_path if avatar_path else path
-        # Normalize path for frontend
-        avatar_url = f"/static/{final_path.replace(os.sep, '/')}"
+            logger.warning(f"Avatar generation failed (non-critical): {e}")
 
         return {
             "status": "success",
-            "emotion": emotion,
-            "photos_captured": count,
+            "original_url": original_url,
+            "avatar_urls": avatar_urls,
+            "avatars_generated": len(avatar_urls),
             "path": path,
-            "avatar_url": avatar_url
         }
     except Exception as e:
         logger.error(f"Photo upload failed: {e}")
@@ -210,10 +235,9 @@ async def complete_onboarding(
         except Exception as e:
             logger.warning(f"Voice reference creation failed (non-critical): {e}")
 
-        # Regenerate all cartoon avatars from captured photos
+        # Regenerate all cartoon avatars from the original photo
         try:
-            from avatar.avatar_generator import regenerate_all_avatars
-            regenerate_all_avatars(twin_id)
+            generate_all_emotion_avatars(twin_id)
             logger.info(f"✅ Avatar stylization complete for twin {twin_id}")
         except Exception as e:
             logger.warning(f"Avatar regeneration failed (non-critical): {e}")

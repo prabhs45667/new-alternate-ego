@@ -192,3 +192,5 @@ wav2lip-env/
 
 # Built landing page (regenerated from ego-echo-forge-main)
 alternate-ego/frontend/public/landing/
+*.zip
+*.zip.zip

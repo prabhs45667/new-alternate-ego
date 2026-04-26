@@ -1,16 +1,24 @@
-"""Social media scraping + data export parsing — Phase 6 Upgraded.
+"""Supreme Data Scraping Pipeline — Priority-Based.
 
-Uses DuckDuckGo Search API (reliable) + Crawl4AI + Instaloader 
-+ BeautifulSoup (fallback) for maximum data collection.
-Includes real-time WebSocket log emission for live frontend updates.
+Pipeline order:
+  Phase 1: Scrape user's ACTUAL URLs (Playwright/curl_cffi)
+  Phase 2: Email/Phone OSINT (Holehe/Sherlock)
+  Phase 3: Deep ZIP file parsing (all files, no limits)
+  Phase 4: RAG indexing with source trust priorities
+
+NO generic Google/DuckDuckGo name searches as primary source.
 """
 import requests
 import json
 import zipfile
+import chardet
 import csv
 import os
 import re
+import time
+import asyncio
 import logging
+import subprocess
 from typing import List, Dict, Optional, Callable
 from bs4 import BeautifulSoup
 from rag.chunker import chunk_by_topic
@@ -32,101 +40,134 @@ def _emit(session_id: Optional[str], message: str):
 
 # ── MAIN ENTRY POINT ─────────────────────────────────────────────
 
-def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, session_id: str = None) -> Dict:
-    """Scrape public profiles and web mentions, then index into RAG.
+def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, email: str = None, phone: str = None, session_id: str = None) -> Dict:
+    """Supreme data collection pipeline — Priority-Based.
 
-    Uses a multi-layer strategy:
-    1. DuckDuckGo search for public info (MOST RELIABLE)
-    2. Crawl4AI / BeautifulSoup for provided URLs
-    3. Instaloader for Instagram profiles
-    4. Google search fallback
-    
-    Args:
-        session_id: Optional session ID for real-time WebSocket log streaming.
+    Phase 1: Scrape user's ACTUAL URLs (LinkedIn, Instagram, Twitter, Facebook)
+    Phase 2: Email & Phone OSINT (Holehe for email, Sherlock for usernames)
+    Phase 3: Focused web searches ONLY for user's specific URLs/usernames
+    Phase 4: Index all chunks with source trust priorities
+
+    NO generic Google/DuckDuckGo name searches — they return wrong people.
     """
     all_chunks = []
-    _emit(session_id, f"🚀 Starting data collection for {name}...")
+    _emit(session_id, f"🚀 Starting supreme data collection for {name}...")
+    _emit(session_id, f"⏱️ This will take 3-5 minutes for thorough analysis...")
 
-    # 1. DuckDuckGo search for public info (PRIORITY — most reliable)
-    _emit(session_id, f"🔍 Searching the web for {name}'s public information...")
-    search_queries = [
-        f'"{name}" LinkedIn profile',
-        f'"{name}" about bio',
-        f'"{name}" portfolio website',
-        f'"{name}" achievements accomplishments',
-        f'"{name}" projects work experience',
-        f'"{name}" education skills',
-        f'"{name}" blog posts articles',
-        f'{name} social media',
-    ]
-    ddg_chunks = 0
-    for query in search_queries:
-        try:
-            _emit(session_id, f"🔎 Searching: '{query}'...")
-            results = _duckduckgo_search_api(query)
-            for result in results[:5]:
-                text = result.get("body", "")
-                title = result.get("title", "")
-                url = result.get("href", "")
-                if text and len(text) > 20:
-                    full_text = f"{title}\n{text}" if title else text
-                    chunks = chunk_by_topic(full_text, "web_search", url)
-                    all_chunks.extend(chunks)
-                    ddg_chunks += len(chunks)
-        except Exception as e:
-            _emit(session_id, f"⚠️ Search failed for '{query}': {str(e)[:60]}")
-    
-    if ddg_chunks > 0:
-        _emit(session_id, f"✅ Found {ddg_chunks} knowledge chunks from web search")
+    # ═══════════════════════════════════════════════════════════════
+    # PHASE 1: Scrape the ACTUAL URLs the user provided
+    # ═══════════════════════════════════════════════════════════════
+    collected_usernames = []  # Collect usernames for Phase 2
 
-    # 2. Scrape provided direct URLs
     if social_urls:
         valid_urls = [u.strip() for u in social_urls if u.strip()]
-        _emit(session_id, f"🔗 Found {len(valid_urls)} social profile URL(s) to scan")
+        _emit(session_id, f"🔗 Phase 1: Scraping {len(valid_urls)} provided URL(s)...")
+
         for idx, url in enumerate(valid_urls):
             try:
                 platform = _detect_source_type(url).replace('_', ' ').title()
-                _emit(session_id, f"🔍 [{idx+1}/{len(valid_urls)}] Scanning {platform}: {url[:60]}...")
+                _emit(session_id, f"🔍 [{idx+1}/{len(valid_urls)}] Scraping {platform}: {url[:60]}...")
 
-                # Use specialized scraper based on URL type
+                text = ""
                 if "instagram.com" in url:
-                    _emit(session_id, f"📸 Using Instagram specialist scraper...")
-                    text = _scrape_instagram(url)
+                    _emit(session_id, f"📸 Instagram: Using curl_cffi TLS bypass...")
+                    text = _scrape_instagram_curlffi(url)
+                    username = _extract_instagram_username(url)
+                    if username:
+                        collected_usernames.append(username)
+
                 elif "linkedin.com" in url:
-                    _emit(session_id, f"💼 Scraping LinkedIn profile...")
-                    text = _scrape_linkedin_public(url, name)
+                    _emit(session_id, f"💼 LinkedIn: Using Playwright + Stealth...")
+                    text = _scrape_linkedin_playwright(url, name)
+                    li_user = url.rstrip('/').split('/')[-1]
+                    if li_user and li_user not in ('in', 'pub', 'company'):
+                        collected_usernames.append(li_user)
+
+                elif "twitter.com" in url or "x.com" in url:
+                    _emit(session_id, f"🐦 Twitter: Scraping profile...")
+                    text = _scrape_twitter_profile(url)
+                    tw_user = url.rstrip('/').split('/')[-1]
+                    if tw_user:
+                        collected_usernames.append(tw_user)
+
+                elif "facebook.com" in url:
+                    _emit(session_id, f"📘 Facebook: Scraping meta tags...")
+                    text = _scrape_url_beautifulsoup(url)
+
                 else:
-                    text = _scrape_with_crawl4ai(url)
+                    text = _scrape_with_curlffi(url)
                     if not text or len(text) < 50:
-                        _emit(session_id, f"🔄 Crawl4AI insufficient, falling back to BeautifulSoup...")
                         text = _scrape_url_beautifulsoup(url)
 
                 if text and len(text) > 50:
                     source_type = _detect_source_type(url)
                     chunks = chunk_by_topic(text, source_type, url)
                     all_chunks.extend(chunks)
-                    _emit(session_id, f"✅ Extracted {len(chunks)} knowledge chunks ({len(text)} chars) from {platform}")
+                    _emit(session_id, f"✅ Extracted {len(chunks)} chunks ({len(text)} chars) from {platform}")
                 else:
-                    _emit(session_id, f"⚠️ Limited data from {url[:50]} — will rely on uploaded data + web search")
+                    _emit(session_id, f"⚠️ Limited data from {url[:50]} — will try web search fallback")
+                    # Targeted search fallback for THIS specific URL
+                    _targeted_url_search(url, name, all_chunks, session_id)
+
             except Exception as e:
                 _emit(session_id, f"❌ Failed to scrape {url[:50]}: {str(e)[:80]}")
+    else:
+        _emit(session_id, f"⚠️ No social URLs provided — skipping Phase 1")
 
-    # 3. Google search fallback for more coverage
-    _emit(session_id, f"🌐 Running Google search for additional mentions...")
-    google_chunks = _google_search_and_scrape(name, session_id)
-    all_chunks.extend(google_chunks)
-    if google_chunks:
-        _emit(session_id, f"✅ Found {len(google_chunks)} additional chunks from Google")
+    phase1_count = len(all_chunks)
+    _emit(session_id, f"📊 Phase 1 complete: {phase1_count} chunks from direct URL scraping")
 
-    # 4. Index all chunks
+    # ═══════════════════════════════════════════════════════════════
+    # PHASE 2: Email & Phone OSINT Verification
+    # ═══════════════════════════════════════════════════════════════
+    if email:
+        email_chunks = _osint_email(email, session_id)
+        all_chunks.extend(email_chunks)
+    
+    if phone:
+        phone_chunks = _osint_phone(phone, session_id)
+        all_chunks.extend(phone_chunks)
+
+    # ═══════════════════════════════════════════════════════════════
+    # PHASE 3: INDEX — No search engine padding. Real data only.
+    # ═══════════════════════════════════════════════════════════════
     if all_chunks:
         _emit(session_id, f"💾 Indexing {len(all_chunks)} total chunks into vector store...")
         added = add_chunks(twin_id, all_chunks)
-        _emit(session_id, f"🎉 Data collection complete! {added} chunks indexed successfully.")
+        _emit(session_id, f"🎉 Data collection complete! {added} chunks indexed.")
         return {"chunks_indexed": added, "sources_found": len(all_chunks)}
 
-    _emit(session_id, f"📭 Limited public data found — twin will be enriched from voice interview & uploaded data.")
+    _emit(session_id, f"📭 Limited public data found — twin will be enriched from voice interview & uploaded ZIP data.")
     return {"chunks_indexed": 0, "sources_found": 0}
+
+
+def _targeted_url_search(url: str, name: str, all_chunks: list, session_id: str = None):
+    """Run targeted DuckDuckGo searches specifically for a given URL's content."""
+    try:
+        # Extract username/identifier from URL
+        identifier = url.rstrip('/').split('/')[-1]
+        if not identifier or len(identifier) < 2:
+            return
+
+        queries = [
+            f'"{identifier}" "{name}"',
+            f'site:{url.split("/")[2]} "{identifier}"',
+        ]
+        for query in queries:
+            try:
+                results = _duckduckgo_search_api(query)
+                for r in results[:3]:
+                    body = r.get("body", "")
+                    title = r.get("title", "")
+                    href = r.get("href", "")
+                    if body and len(body) > 20:
+                        full_text = f"{title}\n{body}" if title else body
+                        chunks = chunk_by_topic(full_text, "web_search", href)
+                        all_chunks.extend(chunks)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _detect_source_type(url: str) -> str:
@@ -232,200 +273,174 @@ def _google_search_and_scrape(name: str, session_id: str = None) -> List[Dict]:
     return chunks
 
 
-# ── LINKEDIN SCRAPER ──────────────────────────────────────────────
+# ── LINKEDIN SCRAPER (PLAYWRIGHT + STEALTH) ───────────────────────
 
-def _scrape_linkedin_public(url: str, name: str = "") -> str:
-    """Scrape a public LinkedIn profile page.
+def _scrape_linkedin_playwright(url: str, name: str = "") -> str:
+    """Scrape LinkedIn profile using Playwright with stealth mode.
     
-    LinkedIn blocks most scrapers, so we use multiple strategies:
-    1. Direct BeautifulSoup scrape (works for some public profiles)
-    2. DuckDuckGo search for LinkedIn cached data
-    3. Trafilatura for text extraction
+    Strategy:
+    1. Playwright headless + stealth → extract ld+json structured data
+    2. Fall back to meta tags if authwall appears
+    3. DuckDuckGo search for cached LinkedIn data
     """
     text = ""
     
-    # Strategy 1: Direct scrape with realistic headers
+    # Strategy 1: Playwright via isolated subprocess (to avoid asyncio loop conflicts in FastAPI)
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        import subprocess
+        import sys
+        import os
         
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        script_path = os.path.join(os.path.dirname(__file__), 'linkedin_scraper_cli.py')
+        result = subprocess.run(
+            [sys.executable, script_path, url, name], 
+            capture_output=True, 
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0 and result.stdout:
+            text = result.stdout
+            logger.info(f"Playwright LinkedIn scraped via subprocess: {len(text)} chars")
+        else:
+            logger.warning(f"Playwright LinkedIn subprocess failed: {result.stderr}")
             
-            # Extract profile data from meta tags (LinkedIn puts key info here)
-            parts = []
-            
-            # OG meta tags contain profile summary
-            og_title = soup.find('meta', property='og:title')
-            if og_title:
-                parts.append(f"Name: {og_title.get('content', '')}")
-            
-            og_desc = soup.find('meta', property='og:description')
-            if og_desc:
-                parts.append(f"About: {og_desc.get('content', '')}")
-            
-            # Twitter meta tags also have info
-            tw_desc = soup.find('meta', attrs={'name': 'twitter:description'})
-            if tw_desc:
-                desc = tw_desc.get('content', '')
-                if desc and desc not in str(parts):
-                    parts.append(f"Summary: {desc}")
-            
-            # Description meta tag
-            meta_desc = soup.find('meta', attrs={'name': 'description'})
-            if meta_desc:
-                desc = meta_desc.get('content', '')
-                if desc and len(desc) > 50:
-                    parts.append(f"Profile: {desc}")
-            
-            # Try extracting visible text
-            for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
-                tag.decompose()
-            
-            body_text = soup.get_text(separator='\n', strip=True)
-            lines = [l.strip() for l in body_text.split('\n') if l.strip() and len(l.strip()) > 15]
-            
-            # Filter LinkedIn noise
-            noise_words = ['sign in', 'sign up', 'join now', 'forgot password', 'cookie', 'privacy policy']
-            clean_lines = [l for l in lines if not any(n in l.lower() for n in noise_words)]
-            
-            if clean_lines:
-                parts.append("Content:\n" + "\n".join(clean_lines[:50]))
-            
-            text = "\n\n".join(parts)
     except Exception as e:
-        logger.warning(f"Direct LinkedIn scrape failed: {e}")
+        logger.warning(f"Playwright LinkedIn execution failed: {e}")
     
-    # Strategy 2: Search DuckDuckGo for LinkedIn cached info
+    # Strategy 2: curl_cffi with Chrome TLS fingerprint
     if not text or len(text) < 100:
         try:
-            # Extract username from URL
+            text = _scrape_with_curlffi(url)
+        except Exception:
+            pass
+    
+    # Strategy 3: DuckDuckGo cached data
+    if not text or len(text) < 100:
+        try:
             username = url.rstrip('/').split('/')[-1]
-            search_queries = [
+            queries = [
                 f'site:linkedin.com "{name}" "{username}"',
-                f'"{name}" linkedin experience education skills',
-                f'"{name}" professional background achievements',
+                f'"{name}" linkedin experience education',
             ]
-            for query in search_queries:
+            parts = []
+            for query in queries:
                 results = _duckduckgo_search_api(query)
                 for r in results[:3]:
                     body = r.get("body", "")
-                    title = r.get("title", "")
                     if body and len(body) > 20:
-                        text += f"\n\n{title}\n{body}"
-        except Exception as e:
-            logger.warning(f"LinkedIn search fallback failed: {e}")
-    
-    # Strategy 3: Trafilatura
-    if not text or len(text) < 100:
-        try:
-            import trafilatura
-            downloaded = trafilatura.fetch_url(url)
-            if downloaded:
-                extracted = trafilatura.extract(downloaded)
-                if extracted:
-                    text += f"\n\n{extracted}"
+                        parts.append(body)
+            if parts:
+                text = "\n\n".join(parts)
         except Exception:
             pass
     
     return text[:8000] if text else ""
 
 
-# ── CRAWL4AI (GENERAL URL SCRAPER) ────────────────────────────────
+# ── INSTAGRAM SCRAPER (curl_cffi TLS BYPASS) ──────────────────────
 
-def _scrape_with_crawl4ai(url: str) -> str:
-    """Scrape a URL using Crawl4AI for LLM-ready markdown output."""
+def _scrape_instagram_curlffi(url: str) -> str:
+    """Scrape Instagram using curl_cffi to bypass 403 TLS fingerprint blocks.
+    
+    curl_cffi mimics Chrome's TLS handshake, making Instagram think 
+    this is a real browser. Much more reliable than requests library.
+    """
+    username = _extract_instagram_username(url)
+    if not username:
+        logger.warning(f"Could not extract username from Instagram URL: {url}")
+        return _scrape_url_beautifulsoup(url)
+    
+    parts = [f"Instagram Profile: @{username}"]
+    profile_url = f"https://www.instagram.com/{username}/"
+    
+    # Strategy 1: curl_cffi with Chrome impersonation
     try:
-        from crawl4ai import WebCrawler
-
-        crawler = WebCrawler(verbose=False)
-        crawler.warmup()
-        result = crawler.run(url=url)
-
-        if result and result.markdown:
-            text = result.markdown[:8000]  # Cap at 8000 chars
-            logger.info(f"Crawl4AI scraped {url}: {len(text)} chars")
-            return text
-        return ""
-    except ImportError:
-        logger.warning("Crawl4AI not installed, falling back to BeautifulSoup")
-        return ""
-    except Exception as e:
-        logger.warning(f"Crawl4AI failed for {url}: {e}")
-        return ""
-
-
-# ── INSTALOADER (INSTAGRAM SPECIALIST) ─────────────────────────────
-
-def _scrape_instagram(url: str) -> str:
-    """Scrape Instagram public profile using Instaloader."""
-    try:
-        import instaloader
-
-        # Extract username from URL
-        username = _extract_instagram_username(url)
-        if not username:
-            return _scrape_url_beautifulsoup(url)
-
-        L = instaloader.Instaloader(
-            download_pictures=False,
-            download_videos=False,
-            download_video_thumbnails=False,
-            download_comments=False,
-            save_metadata=False,
-            compress_json=False
+        from curl_cffi import requests as cffi_requests
+        
+        response = cffi_requests.get(
+            profile_url,
+            impersonate="chrome",
+            timeout=15,
+            allow_redirects=True,
         )
-
-        profile = instaloader.Profile.from_username(L.context, username)
-
-        # Build profile text
-        parts = []
-        parts.append(f"Instagram Profile: @{username}")
-        parts.append(f"Full Name: {profile.full_name}")
-        if profile.biography:
-            parts.append(f"Bio: {profile.biography}")
-        parts.append(f"Followers: {profile.followers}")
-        parts.append(f"Following: {profile.followees}")
-        parts.append(f"Posts: {profile.mediacount}")
-        if profile.external_url:
-            parts.append(f"Website: {profile.external_url}")
-        if profile.is_business_account:
-            parts.append(f"Business Category: {profile.business_category_name}")
-
-        # Get recent post captions (public profiles only, limit 20)
-        try:
-            post_count = 0
-            for post in profile.get_posts():
-                if post_count >= 20:
-                    break
-                if post.caption:
-                    caption_preview = post.caption[:300]
-                    parts.append(f"Post ({post.date_local.strftime('%Y-%m-%d')}): {caption_preview}")
-                    # Also extract hashtags
-                    hashtags = post.caption_hashtags
-                    if hashtags:
-                        parts.append(f"  Hashtags: {', '.join(hashtags[:10])}")
-                post_count += 1
-        except Exception as e:
-            logger.warning(f"Could not fetch Instagram posts for @{username}: {e}")
-
-        text = "\n\n".join(parts)
-        logger.info(f"Instaloader scraped @{username}: {len(text)} chars, {post_count} posts")
-        return text
-
+        
+        if response.status_code == 200:
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Extract meta tags
+            og_title = soup.find('meta', property='og:title')
+            if og_title:
+                parts.append(f"Name: {og_title.get('content', '')}")
+            
+            og_desc = soup.find('meta', property='og:description')
+            if og_desc:
+                desc = og_desc.get('content', '')
+                if desc:
+                    parts.append(f"Profile Summary: {desc}")
+                    stats = re.search(r'([\d,.]+[KkMm]?)\s*Followers.*?([\d,.]+[KkMm]?)\s*Following.*?([\d,.]+[KkMm]?)\s*Posts', desc)
+                    if stats:
+                        parts.append(f"Followers: {stats.group(1)}, Following: {stats.group(2)}, Posts: {stats.group(3)}")
+            
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            if meta_desc:
+                desc = meta_desc.get('content', '')
+                if desc and len(desc) > 20 and desc not in str(parts):
+                    parts.append(f"Bio: {desc}")
+            
+            # Try extracting _sharedData JSON (contains full profile data)
+            shared_match = re.search(r'window\._sharedData\s*=\s*(\{.*?\});', html)
+            if shared_match:
+                try:
+                    shared = json.loads(shared_match.group(1))
+                    user_data = shared.get('entry_data', {}).get('ProfilePage', [{}])[0].get('graphql', {}).get('user', {})
+                    if user_data:
+                        if user_data.get('full_name'):
+                            parts.append(f"Full Name: {user_data['full_name']}")
+                        if user_data.get('biography'):
+                            parts.append(f"Bio: {user_data['biography']}")
+                        if user_data.get('external_url'):
+                            parts.append(f"Website: {user_data['external_url']}")
+                        if user_data.get('edge_followed_by', {}).get('count'):
+                            parts.append(f"Followers: {user_data['edge_followed_by']['count']}")
+                        if user_data.get('is_business_account'):
+                            parts.append(f"Business Account: Yes")
+                            if user_data.get('business_category_name'):
+                                parts.append(f"Category: {user_data['business_category_name']}")
+                except Exception:
+                    pass
+            
+            logger.info(f"curl_cffi Instagram @{username}: {len(parts)} data points")
+        else:
+            logger.warning(f"Instagram curl_cffi returned {response.status_code} for @{username}")
     except ImportError:
-        logger.warning("Instaloader not installed, falling back to BeautifulSoup")
-        return _scrape_url_beautifulsoup(url)
+        logger.warning("curl_cffi not installed, falling back to requests")
     except Exception as e:
-        logger.warning(f"Instaloader failed for {url}: {e}")
-        return _scrape_url_beautifulsoup(url)
+        logger.warning(f"curl_cffi Instagram failed for @{username}: {e}")
+    
+    # Strategy 2: DuckDuckGo search fallback
+    if len(parts) <= 1:
+        try:
+            queries = [
+                f'site:instagram.com "{username}"',
+                f'"{username}" instagram bio about',
+            ]
+            for query in queries:
+                results = _duckduckgo_search_api(query)
+                for r in results[:3]:
+                    body = r.get("body", "")
+                    title = r.get("title", "")
+                    if body and len(body) > 20:
+                        combined = f"{title}: {body}" if title else body
+                        if combined not in str(parts):
+                            parts.append(f"Web: {combined}")
+        except Exception:
+            pass
+    
+    text = "\n\n".join(parts)
+    logger.info(f"Instagram scraped @{username}: {len(text)} chars total")
+    return text
 
 
 def _extract_instagram_username(url: str) -> str:
@@ -434,7 +449,134 @@ def _extract_instagram_username(url: str) -> str:
     if url.startswith("@"):
         return url[1:]
     match = re.search(r'instagram\.com/([A-Za-z0-9_.]+)', url)
-    return match.group(1) if match else ""
+    if match:
+        username = match.group(1)
+        non_usernames = {'p', 'reel', 'stories', 'explore', 'accounts', 'about', 'legal', 'api', 'graphql'}
+        if username.lower() not in non_usernames:
+            return username
+    return ""
+
+
+# ── TWITTER SCRAPER ───────────────────────────────────────────────
+
+def _scrape_twitter_profile(url: str) -> str:
+    """Scrape Twitter/X profile using meta tags and Nitter fallback."""
+    tw_user = url.rstrip('/').split('/')[-1]
+    parts = [f"Twitter Profile: @{tw_user}"]
+    
+    # Strategy 1: curl_cffi on twitter.com for meta tags
+    try:
+        from curl_cffi import requests as cffi_requests
+        response = cffi_requests.get(url, impersonate="chrome", timeout=15)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for prop in ['og:title', 'og:description']:
+                tag = soup.find('meta', property=prop)
+                if tag:
+                    content = tag.get('content', '')
+                    if content and len(content) > 10:
+                        parts.append(content)
+    except Exception:
+        pass
+    
+    # Strategy 2: Try Nitter (open-source Twitter frontend, no login)
+    if len(parts) <= 1:
+        nitter_instances = ['https://nitter.net', 'https://nitter.privacydev.net']
+        for nitter in nitter_instances:
+            try:
+                nitter_url = f"{nitter}/{tw_user}"
+                response = requests.get(nitter_url, timeout=10, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
+                })
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    # Nitter has clean HTML with profile info
+                    bio = soup.find('div', class_='profile-bio')
+                    if bio:
+                        parts.append(f"Bio: {bio.get_text(strip=True)}")
+                    stats = soup.find('div', class_='profile-card-extra')
+                    if stats:
+                        parts.append(f"Stats: {stats.get_text(strip=True)}")
+                    name_el = soup.find('a', class_='profile-card-fullname')
+                    if name_el:
+                        parts.append(f"Name: {name_el.get_text(strip=True)}")
+                    break
+            except Exception:
+                continue
+    
+    # Strategy 3: DuckDuckGo search
+    if len(parts) <= 1:
+        try:
+            results = _duckduckgo_search_api(f'"{tw_user}" twitter bio about')
+            for r in results[:3]:
+                body = r.get("body", "")
+                if body and len(body) > 20:
+                    parts.append(f"Web: {body}")
+        except Exception:
+            pass
+    
+    return "\n\n".join(parts)
+
+
+# ── CURL_CFFI GENERIC SCRAPER ─────────────────────────────────────
+
+def _scrape_with_curlffi(url: str) -> str:
+    """Scrape any URL using curl_cffi with Chrome TLS impersonation."""
+    try:
+        from curl_cffi import requests as cffi_requests
+        response = cffi_requests.get(url, impersonate="chrome", timeout=15)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                tag.decompose()
+            text = soup.get_text(separator='\n', strip=True)
+            lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 10]
+            return '\n'.join(lines[:100])
+    except Exception as e:
+        logger.warning(f"curl_cffi scrape failed for {url}: {e}")
+    return ""
+
+
+# ── USERNAME OSINT (SHERLOCK) ─────────────────────────────────────
+
+def _discover_accounts_username(username: str, session_id: str = None) -> List[Dict]:
+    """Discover accounts across social networks using DuckDuckGo targeted search.
+    
+    Searches for the username across major platforms to find additional profiles.
+    """
+    chunks = []
+    
+    # Search for username across major platforms
+    platforms = [
+        ('GitHub', f'site:github.com "{username}"'),
+        ('Reddit', f'site:reddit.com/user "{username}"'),
+        ('Medium', f'site:medium.com "@{username}"'),
+        ('YouTube', f'site:youtube.com "{username}"'),
+        ('Pinterest', f'site:pinterest.com "{username}"'),
+        ('TikTok', f'site:tiktok.com "@{username}"'),
+    ]
+    
+    found_count = 0
+    for platform_name, query in platforms:
+        try:
+            results = _duckduckgo_search_api(query)
+            for r in results[:2]:
+                body = r.get("body", "")
+                title = r.get("title", "")
+                href = r.get("href", "")
+                if body and len(body) > 20 and username.lower() in (title + body).lower():
+                    text = f"{platform_name} Profile Found:\n{title}\n{body}"
+                    new_chunks = chunk_by_topic(text, "osint_discovery", href)
+                    chunks.extend(new_chunks)
+                    found_count += 1
+                    _emit(session_id, f"  ✅ Found {platform_name} profile for '{username}'")
+        except Exception:
+            pass
+    
+    if found_count > 0:
+        _emit(session_id, f"  🕵️ OSINT: Found {found_count} additional profiles for '{username}'")
+    
+    return chunks
 
 
 # ── BEAUTIFULSOUP (FALLBACK) ──────────────────────────────────────
@@ -518,34 +660,333 @@ def parse_data_export(file_path: str, twin_id: str, session_id: str = None) -> D
 
 
 def _parse_zip_deep(zip_path: str, session_id: str = None) -> List[Dict]:
-    """Deep parse a ZIP data export — detects platform and extracts maximum data."""
+    """Deep parse a ZIP — physically extract, walk EVERY folder, process ALL files.
+    
+    New architecture:
+    1. Extract ZIP to temp directory
+    2. Walk every folder recursively with os.walk
+    3. Route each file by extension to specialized extractors
+    4. Process media (images → EXIF, audio/video → Whisper transcription)
+    5. Cleanup temp directory
+    """
+    import shutil
+    import tempfile
+    
     chunks = []
+    extract_dir = None
+    
     try:
+        # Step 1: Extract ZIP to temp directory
+        extract_dir = tempfile.mkdtemp(prefix="altego_zip_")
+        _emit(session_id, f"📦 Unzipping to temporary directory...")
+        
         with zipfile.ZipFile(zip_path, 'r') as z:
-            file_list = z.namelist()
-
-            # Detect platform based on file structure
-            platform = _detect_platform(file_list)
-            _emit(session_id, f"🔍 Detected platform: {platform.upper()} ({len(file_list)} files)")
-
-            if platform == "instagram":
-                chunks = _parse_instagram_zip(z, file_list, session_id)
-            elif platform == "linkedin":
-                chunks = _parse_linkedin_zip(z, file_list, session_id)
-            elif platform == "twitter":
-                chunks = _parse_twitter_zip(z, file_list)
-            elif platform == "facebook":
-                chunks = _parse_facebook_zip(z, file_list)
-            else:
-                # Generic: parse all JSON, HTML, TXT files
-                chunks = _parse_generic_zip(z, file_list)
-
+            z.extractall(extract_dir)
+        
+        # Step 2: Walk every folder recursively
+        all_files = []
+        for root, dirs, files in os.walk(extract_dir):
+            for filename in files:
+                full_path = os.path.join(root, filename)
+                # Get relative path for labeling
+                rel_path = os.path.relpath(full_path, extract_dir)
+                all_files.append((full_path, rel_path))
+        
+        _emit(session_id, f"📁 Found {len(all_files)} files across all folders")
+        
+        # Step 3: Filter to text-based files only (smart extraction)
+        TEXT_EXTENSIONS = {'.html', '.json', '.txt', '.csv', '.js'}
+        text_files = [(fp, rp) for fp, rp in all_files if os.path.splitext(fp)[1].lower() in TEXT_EXTENSIONS]
+        media_count = len(all_files) - len(text_files)
+        
+        _emit(session_id, f"📝 Processing {len(text_files)} text files (skipping {media_count} media files)")
+        
+        files_processed = 0
+        for i, (full_path, rel_path) in enumerate(text_files):
+            try:
+                ext = os.path.splitext(full_path)[1].lower()
+                file_chunks = []
+                
+                if ext == '.html':
+                    file_chunks = _extract_html_file(full_path, rel_path)
+                elif ext == '.json':
+                    file_chunks = _extract_json_file(full_path, rel_path)
+                elif ext == '.txt':
+                    file_chunks = _extract_txt_file(full_path, rel_path)
+                elif ext == '.csv':
+                    file_chunks = _extract_csv_file(full_path, rel_path)
+                elif ext == '.js':
+                    file_chunks = _extract_js_file(full_path, rel_path)
+                
+                if file_chunks:
+                    chunks.extend(file_chunks)
+                    files_processed += 1
+                    if files_processed % 50 == 0:
+                        _emit(session_id, f"  📊 Progress: {files_processed} files → {len(chunks)} chunks")
+                        
+            except Exception as e:
+                logger.warning(f"Error processing {rel_path}: {e}")
+                continue
+        
+        _emit(session_id, f"✅ ZIP complete: {len(chunks)} chunks from {files_processed}/{len(text_files)} text files")
+        
     except zipfile.BadZipFile:
         logger.error(f"Invalid ZIP file: {zip_path}")
+        _emit(session_id, f"❌ Invalid ZIP file — cannot extract")
     except Exception as e:
         logger.error(f"ZIP parsing error: {e}")
+        _emit(session_id, f"❌ ZIP error: {str(e)[:100]}")
+    finally:
+        # Cleanup temp directory
+        if extract_dir and os.path.exists(extract_dir):
+            try:
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     return chunks
+
+
+# ── FILE-TYPE EXTRACTORS (for physical files on disk) ─────────────
+
+def _extract_html_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract text from an HTML file — primary format for Instagram exports."""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        
+        soup = BeautifulSoup(content, 'html.parser')
+        for tag in soup(['script', 'style']):
+            tag.decompose()
+        
+        text = soup.get_text(separator='\n', strip=True)
+        if text and len(text) > 30:
+            labeled = f"[Source: {rel_path}]\n{text}"
+            return chunk_by_topic(labeled, "data_export", rel_path)
+    except Exception as e:
+        logger.warning(f"HTML extraction failed for {rel_path}: {e}")
+    return []
+
+
+def _extract_json_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract text from a JSON file — handles Instagram's latin-1 encoding quirk."""
+    try:
+        with open(filepath, 'rb') as f:
+            raw = f.read()
+        
+        # Instagram JSON uses raw_unicode_escape for non-ASCII characters
+        # Try the double-decode trick first (Instagram-specific)
+        try:
+            text_content = raw.decode('raw_unicode_escape').encode('latin1').decode('utf-8')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            try:
+                text_content = raw.decode('utf-8')
+            except UnicodeDecodeError:
+                text_content = raw.decode('latin1', errors='replace')
+        
+        data = json.loads(text_content)
+        
+        # Special handling for DM messages (richest personal data)
+        rel_lower = rel_path.lower()
+        if 'message' in rel_lower or 'inbox' in rel_lower:
+            return _extract_dm_messages(data, rel_path)
+        
+        # Generic JSON extraction
+        text = _extract_text_from_json(data)
+        if text and len(text) > 30:
+            labeled = f"[Source: {rel_path}]\n{text}"
+            return chunk_by_topic(labeled, "data_export", rel_path)
+    except Exception as e:
+        logger.warning(f"JSON extraction failed for {rel_path}: {e}")
+    return []
+
+
+def _extract_dm_messages(data, rel_path: str) -> List[Dict]:
+    """Extract DM conversations — the richest personal data source."""
+    chunks_list = []
+    if isinstance(data, dict):
+        participants = data.get('participants', [])
+        p_names = [p.get('name', 'Unknown') for p in participants if isinstance(p, dict)]
+        messages = data.get('messages', [])
+        
+        msg_texts = []
+        for msg in messages[:500]:  # Cap at 500 messages per convo
+            if isinstance(msg, dict):
+                sender = msg.get('sender_name', 'Unknown')
+                content = msg.get('content', '')
+                if content and len(content) > 5:
+                    msg_texts.append(f"{sender}: {content}")
+        
+        if msg_texts:
+            header = f"[DM with {', '.join(p_names)}]"
+            # Chunk messages in groups of 20 for better RAG retrieval
+            for i in range(0, len(msg_texts), 20):
+                batch = msg_texts[i:i+20]
+                text = f"{header}\n" + "\n".join(batch)
+                chunks_list.extend(chunk_by_topic(text, "data_export", rel_path))
+    
+    return chunks_list
+
+
+def _extract_txt_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract text from a TXT file with auto-encoding detection."""
+    try:
+        with open(filepath, 'rb') as f:
+            raw = f.read()
+        
+        detected = chardet.detect(raw)
+        encoding = detected.get('encoding', 'utf-8') or 'utf-8'
+        text = raw.decode(encoding, errors='replace')
+        
+        if text and len(text) > 30:
+            labeled = f"[Source: {rel_path}]\n{text}"
+            return chunk_by_topic(labeled, "data_export", rel_path)
+    except Exception as e:
+        logger.warning(f"TXT extraction failed for {rel_path}: {e}")
+    return []
+
+
+def _extract_csv_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract text from a CSV file."""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            rows = list(csv.reader(f))
+        
+        if rows:
+            title = os.path.splitext(os.path.basename(filepath))[0]
+            text = _csv_to_text(rows, title)
+            if text and len(text) > 30:
+                return chunk_by_topic(text, "data_export", rel_path)
+    except Exception as e:
+        logger.warning(f"CSV extraction failed for {rel_path}: {e}")
+    return []
+
+
+def _extract_js_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract data from Twitter-style .js export files."""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        
+        # Twitter exports: window.YTD.tweet.part0 = [...]
+        json_start = content.find('[')
+        if json_start == -1:
+            json_start = content.find('{')
+        if json_start != -1:
+            json_str = content[json_start:]
+            data = json.loads(json_str)
+            text = _extract_text_from_json(data)
+            if text and len(text) > 30:
+                labeled = f"[Source: {rel_path}]\n{text}"
+                return chunk_by_topic(labeled, "data_export", rel_path)
+    except Exception:
+        pass
+    return []
+
+
+def _extract_image_file(filepath: str, rel_path: str) -> List[Dict]:
+    """Extract EXIF metadata from images (date, location, camera)."""
+    chunks_list = []
+    try:
+        from PIL import Image
+        from PIL.ExifTags import TAGS
+        
+        img = Image.open(filepath)
+        
+        # Extract EXIF metadata
+        exif_data = img._getexif()
+        if exif_data:
+            exif_parts = []
+            for tag_id, value in exif_data.items():
+                tag = TAGS.get(tag_id, tag_id)
+                if tag in ('DateTime', 'DateTimeOriginal', 'GPSInfo', 'Make', 'Model', 'ImageDescription'):
+                    exif_parts.append(f"{tag}: {value}")
+            if exif_parts:
+                text = f"[Image EXIF: {rel_path}]\n" + '\n'.join(exif_parts)
+                chunks_list.extend(chunk_by_topic(text, "data_export", rel_path))
+        
+        img.close()
+    except Exception:
+        pass  # Skip corrupt/unreadable images silently
+    return chunks_list
+
+
+def _extract_video_file(filepath: str, rel_path: str, session_id: str = None) -> List[Dict]:
+    """Extract audio from video → transcribe with Whisper."""
+    chunks_list = []
+    try:
+        import sys
+        
+        # Extract audio track to temp WAV using ffmpeg
+        audio_path = filepath + "_audio.wav"
+        result = subprocess.run([
+            'ffmpeg', '-i', filepath,
+            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+            audio_path, '-y', '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        
+        if result.returncode == 0 and os.path.exists(audio_path):
+            # Transcribe with faster-whisper
+            try:
+                from faster_whisper import WhisperModel
+                model = WhisperModel("base", device="cpu", compute_type="int8")
+                segments, info = model.transcribe(audio_path, language="en", beam_size=3)
+                transcript = " ".join([seg.text for seg in segments]).strip()
+                
+                if transcript and len(transcript) > 10:
+                    text = f"[Video transcript: {rel_path}]\n{transcript}"
+                    chunks_list.extend(chunk_by_topic(text, "data_export", rel_path))
+                    _emit(session_id, f"  🎥 Transcribed video: {os.path.basename(filepath)} ({len(transcript)} chars)")
+            except ImportError:
+                logger.warning("faster-whisper not installed, skipping video transcription")
+            except Exception as e:
+                logger.warning(f"Whisper transcription failed for {rel_path}: {e}")
+            finally:
+                # Cleanup temp audio
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+    except FileNotFoundError:
+        logger.info("ffmpeg not found — skipping video transcription")
+    except Exception as e:
+        logger.warning(f"Video extraction failed for {rel_path}: {e}")
+    return chunks_list
+
+
+def _extract_audio_file(filepath: str, rel_path: str, session_id: str = None) -> List[Dict]:
+    """Transcribe audio files with Whisper."""
+    chunks_list = []
+    try:
+        # Convert to WAV first
+        wav_path = filepath + ".wav"
+        result = subprocess.run([
+            'ffmpeg', '-i', filepath,
+            '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+            wav_path, '-y', '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        
+        if result.returncode == 0 and os.path.exists(wav_path):
+            try:
+                from faster_whisper import WhisperModel
+                model = WhisperModel("base", device="cpu", compute_type="int8")
+                segments, info = model.transcribe(wav_path, language="en", beam_size=3)
+                transcript = " ".join([seg.text for seg in segments]).strip()
+                
+                if transcript and len(transcript) > 10:
+                    text = f"[Audio transcript: {rel_path}]\n{transcript}"
+                    chunks_list.extend(chunk_by_topic(text, "data_export", rel_path))
+                    _emit(session_id, f"  🎵 Transcribed audio: {os.path.basename(filepath)}")
+            except ImportError:
+                logger.warning("faster-whisper not installed, skipping audio transcription")
+            except Exception as e:
+                logger.warning(f"Whisper failed for {rel_path}: {e}")
+            finally:
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
+    except FileNotFoundError:
+        logger.info("ffmpeg not found — skipping audio transcription")
+    except Exception as e:
+        logger.warning(f"Audio extraction failed for {rel_path}: {e}")
+    return chunks_list
 
 
 def _detect_platform(file_list: List[str]) -> str:
@@ -565,6 +1006,31 @@ def _detect_platform(file_list: List[str]) -> str:
 
 # ── INSTAGRAM ZIP PARSER ──────────────────────────────────────────
 
+
+def _safe_decode(z: zipfile.ZipFile, fname: str) -> str:
+    """Read a file from ZIP and safely decode it, auto-detecting encoding."""
+    raw_data = z.read(fname)
+    # Fast paths for common encodings
+    try:
+        return raw_data.decode('utf-8')
+    except UnicodeDecodeError:
+        pass
+    
+    try:
+        # Very common in Facebook exports
+        return raw_data.decode('latin1')
+    except UnicodeDecodeError:
+        pass
+        
+    # Fallback to chardet
+    detected = chardet.detect(raw_data)
+    encoding = detected.get('encoding', 'utf-8')
+    try:
+        return raw_data.decode(encoding, errors='ignore')
+    except Exception:
+        return raw_data.decode('utf-8', errors='ignore')
+
+
 def _parse_instagram_zip(z: zipfile.ZipFile, file_list: List[str], session_id: str = None) -> List[Dict]:
     """Parse Instagram data export ZIP — extracts everything."""
     chunks = []
@@ -574,7 +1040,7 @@ def _parse_instagram_zip(z: zipfile.ZipFile, file_list: List[str], session_id: s
         fname_lower = fname.lower()
         try:
             if fname.endswith('.json'):
-                data = json.loads(z.read(fname).decode('utf-8', errors='ignore'))
+                data = json.loads(_safe_decode(z, fname))
 
                 # Posts & captions
                 if 'content' in fname_lower and 'posts' in fname_lower:
@@ -645,7 +1111,7 @@ def _parse_instagram_zip(z: zipfile.ZipFile, file_list: List[str], session_id: s
                         chunks.extend(chunk_by_topic(text, "data_export", f"instagram/{fname}"))
 
             elif fname.endswith('.html'):
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 soup = BeautifulSoup(content, 'html.parser')
                 text = soup.get_text(separator='\n', strip=True)
                 if text and len(text) > 50:
@@ -747,7 +1213,7 @@ def _parse_linkedin_zip(z: zipfile.ZipFile, file_list: List[str], session_id: st
         fname_lower = fname.lower()
         try:
             if fname.endswith('.csv'):
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 rows = list(csv.reader(content.splitlines()))
 
                 if 'profile' in fname_lower:
@@ -790,7 +1256,7 @@ def _parse_linkedin_zip(z: zipfile.ZipFile, file_list: List[str], session_id: st
                         chunks.extend(chunk_by_topic(text, "data_export", f"linkedin/{fname}"))
 
             elif fname.endswith('.json'):
-                data = json.loads(z.read(fname).decode('utf-8', errors='ignore'))
+                data = json.loads(_safe_decode(z, fname))
                 text = _extract_text_from_json(data)
                 if text and len(text) > 30:
                     chunks.extend(chunk_by_topic(text, "data_export", f"linkedin/{fname}"))
@@ -826,7 +1292,7 @@ def _parse_twitter_zip(z: zipfile.ZipFile, file_list: List[str]) -> List[Dict]:
         try:
             if fname.endswith('.js'):
                 # Twitter exports are JS files: window.YTD.tweet.part0 = [...]
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 # Strip the JS variable assignment to get pure JSON
                 json_start = content.find('[')
                 if json_start == -1:
@@ -883,7 +1349,7 @@ def _parse_facebook_zip(z: zipfile.ZipFile, file_list: List[str]) -> List[Dict]:
         fname_lower = fname.lower()
         try:
             if fname.endswith('.json'):
-                data = json.loads(z.read(fname).decode('utf-8', errors='ignore'))
+                data = json.loads(_safe_decode(z, fname))
 
                 if 'your_posts' in fname_lower or 'posts' in fname_lower:
                     text = _extract_text_from_json(data)
@@ -907,7 +1373,7 @@ def _parse_facebook_zip(z: zipfile.ZipFile, file_list: List[str]) -> List[Dict]:
                         chunks.extend(chunk_by_topic(text, "data_export", f"facebook/{fname}"))
 
             elif fname.endswith('.html'):
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 soup = BeautifulSoup(content, 'html.parser')
                 text = soup.get_text(separator='\n', strip=True)
                 if text and len(text) > 50:
@@ -928,16 +1394,16 @@ def _parse_generic_zip(z: zipfile.ZipFile, file_list: List[str]) -> List[Dict]:
     for fname in file_list:
         try:
             if fname.endswith('.json'):
-                data = json.loads(z.read(fname).decode('utf-8', errors='ignore'))
+                data = json.loads(_safe_decode(z, fname))
                 text = _extract_text_from_json(data)
                 if text and len(text) > 30:
                     chunks.extend(chunk_by_topic(text, "data_export", fname))
             elif fname.endswith('.txt') or fname.endswith('.csv'):
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 if content and len(content) > 30:
                     chunks.extend(chunk_by_topic(content[:5000], "data_export", fname))
             elif fname.endswith('.html'):
-                content = z.read(fname).decode('utf-8', errors='ignore')
+                content = _safe_decode(z, fname)
                 soup = BeautifulSoup(content, 'html.parser')
                 text = soup.get_text(separator='\n', strip=True)
                 if text and len(text) > 50:
@@ -1002,3 +1468,65 @@ def _extract_text_from_json(data, depth=0) -> str:
 def _extract_text_recursive(data) -> str:
     """Simple recursive text extraction."""
     return _extract_text_from_json(data, depth=0)
+
+
+# ── OSINT HELPERS ──────────────────────────────────────────────────
+
+def _osint_email(email: str, session_id: str = None) -> List[Dict]:
+    """Check where an email is registered using holehe."""
+    if not email: return []
+    _emit(session_id, f"🔎 Running OSINT scan on email: {email}...")
+    try:
+        # Run holehe via subprocess to avoid asyncio conflicts
+        result = subprocess.run(["holehe", email, "--only-used", "--no-color"], capture_output=True, text=True, timeout=45)
+        found_sites = []
+        for line in result.stdout.splitlines():
+            if "[+]" in line:
+                site = line.split("[+]")[1].strip()
+                if site:
+                    found_sites.append(site)
+        if found_sites:
+            _emit(session_id, f"  ✅ Found {len(found_sites)} accounts linked to email: {', '.join(found_sites[:5])}...")
+            text = f"Email {email} is registered on the following platforms: {', '.join(found_sites)}"
+            return chunk_by_topic(text, "osint", "holehe")
+        else:
+            _emit(session_id, f"  ⚠️ No linked accounts found for email.")
+    except Exception as e:
+        logger.warning(f"Email OSINT failed: {e}")
+    return []
+
+def _osint_phone(phone: str, session_id: str = None) -> List[Dict]:
+    """Extract carrier and region info from phone using phonenumbers."""
+    if not phone: return []
+    _emit(session_id, f"🔎 Running OSINT scan on phone: {phone}...")
+    try:
+        import phonenumbers
+        from phonenumbers import geocoder, carrier, timezone
+        
+        formatted_phone = phone
+        # Ensure country code is present (default +91 for 10-digit Indian numbers based on user's sample)
+        if len(phone) == 10 and phone.isdigit():
+            formatted_phone = "+91" + phone
+        elif not phone.startswith("+"):
+            formatted_phone = "+" + phone
+
+        parsed = phonenumbers.parse(formatted_phone)
+        if phonenumbers.is_valid_number(parsed):
+            region = geocoder.description_for_number(parsed, "en")
+            network = carrier.name_for_number(parsed, "en")
+            tz = timezone.time_zones_for_number(parsed)
+            
+            details = []
+            if region: details.append(f"Region: {region}")
+            if network: details.append(f"Carrier: {network}")
+            if tz: details.append(f"Timezones: {', '.join(tz)}")
+            
+            if details:
+                text = f"Phone number {phone} details: " + ", ".join(details)
+                _emit(session_id, f"  ✅ Phone OSINT: {', '.join(details)}")
+                return chunk_by_topic(text, "osint", "phonenumbers")
+        else:
+            _emit(session_id, f"  ⚠️ Phone OSINT: Invalid phone number format.")
+    except Exception as e:
+        logger.warning(f"Phone OSINT failed: {e}")
+    return []

@@ -6,6 +6,8 @@ import { motion } from "framer-motion";
 import {
     scrapeProfiles,
     uploadPhoto,
+    uploadSinglePhoto,
+    generateAllAvatars,
     uploadVoice,
     completeOnboarding,
     getInterviewQuestions,
@@ -130,6 +132,7 @@ export default function OnboardingPage() {
                 instagram_url: s.instagram_url || "",
                 twitter_url: s.twitter_url || "",
                 facebook_url: s.facebook_url || "",
+                other_url: s.other_url || "",
             });
             setLogs(prev => [...prev, "✅ Scraping complete! Processing profile..."]);
         } catch (e) {
@@ -206,10 +209,9 @@ export default function OnboardingPage() {
     const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
 
     const capturePhoto = async () => {
-        // Debounce: prevent rapid double-captures
         if (!videoRef.current || !canvasRef.current || !session || isCapturing) return;
         setIsCapturing(true);
-        setIsGeneratingAvatar(true); // Show a generating indicator
+        setIsGeneratingAvatar(true);
 
         const video = videoRef.current;
         const canvas = canvasRef.current;
@@ -219,45 +221,37 @@ export default function OnboardingPage() {
         ctx.drawImage(video, 0, 0);
 
         const base64 = canvas.toDataURL("image/jpeg", 0.85);
-        const emotion = EMOTIONS[currentEmotion];
 
         try {
-            const result = await uploadPhoto({
+            await uploadSinglePhoto({
                 twin_id: session.twin_id,
                 session_id: session.session_id,
-                emotion,
                 photo: base64,
             });
 
-            // Use the returned avatar URL if available, otherwise fallback to the captured base64
-            const finalImage = result.avatar_url ? `http://localhost:8000${result.avatar_url}` : base64;
-            const newPhotos = [...capturedPhotos, finalImage];
-            setCapturedPhotos(newPhotos);
-
-            if (currentEmotion < EMOTIONS.length - 1) {
-                // Wait 600ms before allowing next capture to prevent race condition
-                setTimeout(() => {
-                    setCurrentEmotion(currentEmotion + 1);
-                    setIsCapturing(false);
-                    setIsGeneratingAvatar(false);
-                }, 600);
-            } else {
-                // All photos captured, move to voice
+            const result = await generateAllAvatars(session.twin_id);
+            
+            const urls = EMOTIONS.map(e => `http://localhost:8000/static/storage/avatars/${session.twin_id}/${e}_avatar.png?t=${Date.now()}`);
+            setCapturedPhotos(urls);
+            setCurrentEmotion(4);
+            
+            // Give user time to see the generated avatars before moving
+            setTimeout(() => {
                 stopCamera();
-                setIsGeneratingAvatar(false);
                 setStep("voice");
-            }
+            }, 3000);
+            
         } catch (e) {
-            setError("Failed to upload photo and generate avatar.");
+            setError("Failed to upload photo and generate avatars.");
+        } finally {
             setIsCapturing(false);
             setIsGeneratingAvatar(false);
         }
     };
 
     const retakePhoto = (index: number) => {
-        const newPhotos = capturedPhotos.filter((_, i) => i !== index);
-        setCapturedPhotos(newPhotos);
-        setCurrentEmotion(index);
+        setCapturedPhotos([]);
+        setCurrentEmotion(0);
     };
 
     // Voice functions
@@ -805,8 +799,8 @@ export default function OnboardingPage() {
                         transition={{ duration: 0.5 }}
                         style={{ textAlign: 'center', paddingTop: '0.5rem', paddingBottom: '1rem', flexShrink: 0 }}
                     >
-                        <h1 style={{ fontSize: '1.8rem', fontWeight: 600, color: 'white', letterSpacing: '-0.02em', marginBottom: '0.3rem' }}>Configure Your Avatar</h1>
-                        <p style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.6)', fontWeight: 300 }}>Capture four expressions to bring your digital twin to life</p>
+                        <h1 style={{ fontSize: '1.8rem', fontWeight: 600, color: 'white', letterSpacing: '-0.02em', marginBottom: '0.3rem' }}>Configure Your Avatars</h1>
+                        <p style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.6)', fontWeight: 300 }}>Capture one photo to generate your emotion-synced digital twin</p>
                     </motion.div>
 
                     {/* Main Content - Camera + Sidebar */}
@@ -847,14 +841,14 @@ export default function OnboardingPage() {
                                     color: 'rgba(255,255,255,0.9)',
                                     fontWeight: 600,
                                 }}>
-                                    Expression {currentEmotion + 1} / 4
+                                    One-Shot AI Capture
                                 </span>
                             </div>
 
                             {/* Instruction text */}
                             <div style={{ position: 'absolute', bottom: '90px', left: 0, right: 0, zIndex: 10, textAlign: 'center', padding: '0 1rem' }}>
                                 <h2 style={{ fontSize: '1.5rem', color: 'white', fontWeight: 500, textShadow: '0 2px 12px rgba(0,0,0,0.8)', marginBottom: '4px' }}>
-                                    {EMOTION_ICONS[EMOTIONS[currentEmotion]]} {EMOTION_LABELS[EMOTIONS[currentEmotion]]}
+                                    {isGeneratingAvatar ? '✨ Generating 4 Avatars...' : 'Look straight & Smile slightly'}
                                 </h2>
                             </div>
 
@@ -904,7 +898,7 @@ export default function OnboardingPage() {
                             )}
                         </div>
 
-                        {/* Right: Capture Progress Sidebar */}
+                        {/* Right: AI Avatars Sidebar */}
                         <div style={{
                             display: 'flex',
                             flexDirection: 'column' as const,
@@ -919,8 +913,8 @@ export default function OnboardingPage() {
                             {/* Sidebar Header */}
                             <div style={{ marginBottom: '1rem', flexShrink: 0 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'white' }}>Capture Progress</h3>
-                                    <span style={{ fontSize: '0.8rem', color: '#a78bfa', fontWeight: 600 }}>{capturedPhotos.length} / 4</span>
+                                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'white' }}>AI Avatars</h3>
+                                    <span style={{ fontSize: '0.8rem', color: '#a78bfa', fontWeight: 600 }}>{capturedPhotos.length > 0 ? 'Ready' : 'Pending'}</span>
                                 </div>
                                 {/* Progress bar */}
                                 <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '99px', overflow: 'hidden', marginTop: '8px' }}>
@@ -986,7 +980,7 @@ export default function OnboardingPage() {
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <h4 style={{ color: 'white', fontWeight: 500, fontSize: '0.95rem', textTransform: 'capitalize' as const, letterSpacing: '0.02em' }}>{emotion}</h4>
                                                 <p style={{ color: isCaptured ? 'rgba(52,199,89,0.85)' : 'rgba(255,255,255,0.45)', fontSize: '0.75rem', marginTop: '2px' }}>
-                                                    {isCaptured ? '✓ Captured' : isCurrent ? 'Awaiting...' : 'Pending'}
+                                                    {isCaptured ? '✓ Generated' : isGeneratingAvatar ? '✨ Generating...' : 'Pending'}
                                                 </p>
                                             </div>
 

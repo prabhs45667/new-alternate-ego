@@ -278,18 +278,13 @@ export default function ChatPage() {
             angry: "angry", neutral: "neutral", thoughtful: "neutral",
         };
         const emotion = emotionMap[currentMood] || "neutral";
-        // Prefer cartoon avatar version, frontend will fallback via onError
-        return `http://localhost:8000/static/storage/avatars/${session.twin_id}/${emotion}_avatar.jpg`;
+        // Prefer cartoon avatar version (.png)
+        return `http://localhost:8000/static/storage/avatars/${session.twin_id}/${emotion}_avatar.png`;
     };
 
     const getRawAvatarUrl = () => {
         if (!session?.twin_id) return "";
-        const emotionMap: Record<string, string> = {
-            happy: "happy", excited: "happy", sad: "sad",
-            angry: "angry", neutral: "neutral", thoughtful: "neutral",
-        };
-        const emotion = emotionMap[currentMood] || "neutral";
-        return `http://localhost:8000/static/storage/avatars/${session.twin_id}/${emotion}.jpg`;
+        return `http://localhost:8000/static/storage/avatars/${session.twin_id}/original.jpg`;
     };
 
     const mood = MOOD_CONFIG[currentMood] || MOOD_CONFIG.neutral;
