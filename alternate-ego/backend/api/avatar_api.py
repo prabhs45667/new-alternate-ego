@@ -13,6 +13,8 @@ router = APIRouter()
 
 class GenerateAvatarsRequest(BaseModel):
     twin_id: str
+    name: str = ""  # Person's name for team member matching
+    gender: str = "male"  # male, female, or trans
 
 
 class SinglePhotoUploadRequest(BaseModel):
@@ -46,10 +48,10 @@ async def upload_single_photo(req: SinglePhotoUploadRequest):
 
 @router.post("/generate-all")
 async def generate_all_avatars(req: GenerateAvatarsRequest):
-    """Generate ALL 4 emotion cartoon avatars from the single original photo.
+    """Generate ALL 4 emotion cartoon avatars from pre-stored images.
     
-    This calls Gemini API 4 times (neutral, happy, sad, angry) and returns
-    URLs for all generated avatars.
+    Uses name matching for team members, or gender-based fallback
+    for other users. No external API calls needed.
     
     Expected output:
     - original: The raw captured photo
@@ -61,8 +63,10 @@ async def generate_all_avatars(req: GenerateAvatarsRequest):
     from avatar.avatar_generator import generate_all_emotion_avatars, get_all_avatars
     
     try:
-        # Generate all emotion avatars from original photo
-        results = generate_all_emotion_avatars(req.twin_id)
+        # Generate all emotion avatars from pre-stored images
+        results = generate_all_emotion_avatars(
+            req.twin_id, name=req.name, gender=req.gender
+        )
         
         # Build response with URLs
         all_avatars = get_all_avatars(req.twin_id)
@@ -87,12 +91,12 @@ async def generate_all_avatars(req: GenerateAvatarsRequest):
 
 
 @router.post("/generate-single")
-async def generate_single_emotion(twin_id: str, emotion: str):
+async def generate_single_emotion(twin_id: str, emotion: str, name: str = "", gender: str = "male"):
     """Generate a single emotion avatar (for retry/regeneration)."""
     from avatar.avatar_generator import generate_single_avatar
     
     try:
-        path = generate_single_avatar(twin_id, emotion)
+        path = generate_single_avatar(twin_id, emotion, name=name, gender=gender)
         if path:
             url = f"/static/{path.replace(os.sep, '/')}"
             return {"status": "success", "emotion": emotion, "avatar_url": url}

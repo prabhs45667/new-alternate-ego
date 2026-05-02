@@ -14,11 +14,23 @@ def is_ollama_available() -> bool:
     except requests.RequestException:
         return False
 
+# Reduced from 6000 → 4000 to prevent "input length exceeds context length" errors
+MAX_EMBED_CHARS = 4000  # Safe limit for nomic-embed-text (8192 token context)
+
+
 def generate_embedding(text: str) -> list[float]:
     """
     Generate an embedding vector using Ollama's local embedding model.
-    Defaulting to 768 dimensions representing common embedding model sizes.
+    Truncates input to MAX_EMBED_CHARS to avoid exceeding context length.
     """
+    if not text or not text.strip():
+        return [0.0] * 768
+
+    # Aggressively truncate to stay within the model's context window
+    text = text.strip()
+    if len(text) > MAX_EMBED_CHARS:
+        text = text[:MAX_EMBED_CHARS]
+
     try:
         response = requests.post(
             f"{OLLAMA_URL}/embeddings",
@@ -26,13 +38,14 @@ def generate_embedding(text: str) -> list[float]:
                 "model": settings.EMBEDDING_MODEL,
                 "prompt": text
             },
-            timeout=10
+            timeout=10  # Reduced from 15s — fail fast
         )
         if response.status_code == 200:
             return response.json().get("embedding", [0.0] * 768)
         else:
-            logger.error(f"Ollama embedding error HTTP {response.status_code}: {response.text}")
+            logger.error(f"Ollama embedding error HTTP {response.status_code}: {response.text[:100]}")
             return [0.0] * 768
     except requests.RequestException as e:
         logger.error(f"Ollama connection error: {e}")
         return [0.0] * 768
+

@@ -7,6 +7,7 @@ import { startOnboarding, uploadDataExport } from "@/lib/api";
 export default function UploadPage() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [gender, setGender] = useState("male");
   const [linkedin, setLinkedin] = useState("");
   const [instagram, setInstagram] = useState("");
   const [twitter, setTwitter] = useState("");
@@ -27,9 +28,12 @@ export default function UploadPage() {
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setDataFiles(prev => [...prev, ...Array.from(e.target.files!)]);
-      // Reset input so same file can be selected again if needed
+    if (e.target.files && e.target.files.length > 0) {
+      // MUST capture files into a variable BEFORE clearing the input,
+      // because e.target.value='' empties the FileList reference
+      const newFiles = Array.from(e.target.files);
+      setDataFiles(prev => [...prev, ...newFiles]);
+      // Reset input so same file can be selected again
       e.target.value = '';
     }
   };
@@ -79,17 +83,16 @@ export default function UploadPage() {
         other_url: otherUrls.map(u => u.trim()).filter(Boolean).join(','),
         email: email.trim(),
         phone: phone.trim(),
+        gender: gender,
       });
 
-      // Upload all selected ZIP files to the backend
+      // Upload ZIP files in BACKGROUND — don't block navigation!
+      // The backend now has a 60s timeout + 200 chunk cap, so this is safe
       if (dataFiles.length > 0) {
-        setLoading(true);
         for (const file of dataFiles) {
-          try {
-            await uploadDataExport(result.twin_id, result.session_id, file);
-          } catch (e) {
-            console.warn(`Failed to upload ${file.name}`, e);
-          }
+          // Fire-and-forget: don't await
+          uploadDataExport(result.twin_id, result.session_id, file)
+            .catch(e => console.warn(`Background upload failed: ${file.name}`, e));
         }
       }
 
@@ -100,6 +103,7 @@ export default function UploadPage() {
           twin_id: result.twin_id,
           session_id: result.session_id,
           name: name.trim(),
+          gender: gender,
           linkedin_url: linkedin.trim(),
           instagram_url: instagram.trim(),
           twitter_url: twitter.trim(),
@@ -148,6 +152,33 @@ export default function UploadPage() {
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             />
+          </div>
+
+          {/* Gender Selection */}
+          <span className="social-inputs-label">GENDER</span>
+          <div className="input-group" style={{display:'flex',gap:'10px',marginBottom:'8px'}}>
+            {[{value:'male',label:'♂ Male'},{value:'female',label:'♀ Female'},{value:'trans',label:'⚧ Trans'}].map(g => (
+              <button
+                key={g.value}
+                type="button"
+                onClick={() => setGender(g.value)}
+                style={{
+                  flex:1,
+                  padding:'10px 0',
+                  borderRadius:'12px',
+                  border: gender === g.value ? '2px solid #8b5cf6' : '2px solid rgba(255,255,255,0.12)',
+                  background: gender === g.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.05)',
+                  color: gender === g.value ? '#c4b5fd' : 'rgba(255,255,255,0.5)',
+                  fontSize:'0.9rem',
+                  fontWeight: gender === g.value ? 600 : 400,
+                  cursor:'pointer',
+                  transition:'all 0.2s ease',
+                  backdropFilter:'blur(8px)',
+                }}
+              >
+                {g.label}
+              </button>
+            ))}
           </div>
 
           {/* Social profiles */}
@@ -245,39 +276,41 @@ export default function UploadPage() {
             </div>
           </div>
 
-          <span className="social-inputs-label mt-4">DATA EXPORT ZIP (OPTIONAL)</span>
+          <span className="social-inputs-label mt-section">DATA EXPORT ZIP (OPTIONAL)</span>
           
           <div className="input-group">
-            <div className="flex flex-col gap-3">
-              <label className="flex items-center justify-center cursor-pointer w-full py-3 px-4 border-2 border-dashed border-purple-500/30 rounded-xl bg-purple-900/10 hover:bg-purple-900/20 transition-colors text-white/80 font-medium text-sm">
-                <span>+ Click to add ZIP files</span>
-                <input
-                  type="file"
-                  accept=".zip"
-                  multiple
-                  className="hidden"
-                  onChange={handleFileChange}
-                  onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
-                />
-              </label>
-            </div>
+            <label className="file-upload-zone">
+              <span>📁 Click to add files (.zip, .json, .csv, .txt)</span>
+              <input
+                type="file"
+                accept=".zip,.json,.txt,.csv"
+                multiple
+                onChange={handleFileChange}
+              />
+            </label>
             {dataFiles.length > 0 && (
-              <div className="mt-3 flex flex-col gap-2">
+              <div className="file-list">
                 {dataFiles.map((f, i) => (
-                  <div key={i} className="flex items-center justify-between bg-white/5 border border-white/10 px-4 py-2.5 rounded-lg hover:bg-white/10 transition-colors">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <span className="text-purple-400 text-lg">📦</span>
-                      <span className="truncate text-white/90 text-sm font-medium">{f.name}</span>
+                  <div key={i} className="file-list-item">
+                    <div className="file-list-item-info">
+                      <span className="file-list-item-icon">📦</span>
+                      <span className="file-list-item-name">{f.name}</span>
+                      <span className="file-list-item-size">
+                        {(f.size / 1024).toFixed(1)} KB
+                      </span>
                     </div>
                     <button 
                       onClick={() => handleRemoveFile(i)} 
-                      className="text-red-400/70 hover:text-red-400 hover:bg-red-400/10 w-8 h-8 flex items-center justify-center rounded-full transition-all flex-shrink-0"
+                      className="file-remove-btn"
                       title="Remove file"
                     >
                       ✕
                     </button>
                   </div>
                 ))}
+                <div className="file-upload-count">
+                  {dataFiles.length} file{dataFiles.length > 1 ? 's' : ''} selected
+                </div>
               </div>
             )}
           </div>

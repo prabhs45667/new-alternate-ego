@@ -41,29 +41,77 @@ def _emit(session_id: Optional[str], message: str):
 # ── MAIN ENTRY POINT ─────────────────────────────────────────────
 
 def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, email: str = None, phone: str = None, session_id: str = None) -> Dict:
-    """Supreme data collection pipeline — Priority-Based.
+    """Supreme data collection pipeline — Priority-Based with timeout.
 
-    Phase 1: Scrape user's ACTUAL URLs (LinkedIn, Instagram, Twitter, Facebook)
-    Phase 2: Email & Phone OSINT (Holehe for email, Sherlock for usernames)
-    Phase 3: Focused web searches ONLY for user's specific URLs/usernames
-    Phase 4: Index all chunks with source trust priorities
+    Phase 0: Check pre-seeded cache (instant for known users like Prabhdeep Singh)
+    Phase 1: Scrape user's ACTUAL URLs (LinkedIn, Instagram, Twitter, Facebook) — max 90s
+    Phase 2: Email & Phone OSINT (Holehe/Sherlock)
+    Phase 3: Index all chunks with source trust priorities
 
     NO generic Google/DuckDuckGo name searches — they return wrong people.
+    Enforces a maximum total scraping time of ~90 seconds.
     """
+    import threading
+    
     all_chunks = []
-    _emit(session_id, f"🚀 Starting supreme data collection for {name}...")
-    _emit(session_id, f"⏱️ This will take 3-5 minutes for thorough analysis...")
+    scrape_start = time.time()
+    MAX_SCRAPE_SECONDS = 90  # Hard limit: 90 seconds total for scraping
+    
+    _emit(session_id, f"🚀 Starting data collection for {name}...")
 
     # ═══════════════════════════════════════════════════════════════
-    # PHASE 1: Scrape the ACTUAL URLs the user provided
+    # PHASE 0: Check pre-seeded data cache (INSTANT)
     # ═══════════════════════════════════════════════════════════════
-    collected_usernames = []  # Collect usernames for Phase 2
+    try:
+        from rag.preseed_cache import is_preseeded_user, get_cached_chunks
+        
+        if is_preseeded_user(name):
+            _emit(session_id, f"⚡ Known user detected! Loading pre-cached data...")
+            cached = get_cached_chunks(name)
+            if cached and len(cached) > 0:
+                all_chunks.extend(cached)
+                _emit(session_id, f"✅ Loaded {len(cached)} pre-cached chunks from data exports!")
+                _emit(session_id, f"⏱️ Saved ~5 minutes of scraping time!")
+                
+                # SKIP Phase 1 and 2 for pre-seeded users to make onboarding instant
+                _emit(session_id, f"🚀 Skipping active scraping due to cached data...")
+                added = add_chunks(twin_id, all_chunks)
+                _emit(session_id, f"🎉 Data collection complete! {added} chunks indexed instantly.")
+                return {"chunks_indexed": added, "sources_found": len(all_chunks)}
+                
+            else:
+                _emit(session_id, f"📦 Building pre-seed cache from ZIP exports (one-time)...")
+                from rag.preseed_cache import build_preseed_cache
+                count = build_preseed_cache()
+                if count > 0:
+                    cached = get_cached_chunks(name)
+                    if cached:
+                        all_chunks.extend(cached)
+                        _emit(session_id, f"✅ Built and loaded {len(cached)} chunks from ZIP exports!")
+                        # SKIP Phase 1 and 2
+                        added = add_chunks(twin_id, all_chunks)
+                        return {"chunks_indexed": added, "sources_found": len(all_chunks)}
+    except Exception as e:
+        logger.warning(f"Pre-seed cache check failed: {e}")
+
+    _emit(session_id, f"⏱️ Smart scraping (max {MAX_SCRAPE_SECONDS}s timeout)...")
+
+    # ═══════════════════════════════════════════════════════════════
+    # PHASE 1: Scrape the ACTUAL URLs the user provided (with timeout)
+    # ═══════════════════════════════════════════════════════════════
+    collected_usernames = []
 
     if social_urls:
         valid_urls = [u.strip() for u in social_urls if u.strip()]
         _emit(session_id, f"🔗 Phase 1: Scraping {len(valid_urls)} provided URL(s)...")
 
         for idx, url in enumerate(valid_urls):
+            # Check time budget
+            elapsed = time.time() - scrape_start
+            if elapsed > MAX_SCRAPE_SECONDS:
+                _emit(session_id, f"⏱️ Time limit reached ({int(elapsed)}s) — skipping remaining URLs")
+                break
+            
             try:
                 platform = _detect_source_type(url).replace('_', ' ').title()
                 _emit(session_id, f"🔍 [{idx+1}/{len(valid_urls)}] Scraping {platform}: {url[:60]}...")
@@ -105,9 +153,10 @@ def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, ema
                     all_chunks.extend(chunks)
                     _emit(session_id, f"✅ Extracted {len(chunks)} chunks ({len(text)} chars) from {platform}")
                 else:
-                    _emit(session_id, f"⚠️ Limited data from {url[:50]} — will try web search fallback")
-                    # Targeted search fallback for THIS specific URL
-                    _targeted_url_search(url, name, all_chunks, session_id)
+                    _emit(session_id, f"⚠️ Limited data from {url[:50]}")
+                    # Only do fallback search if we still have time
+                    if time.time() - scrape_start < MAX_SCRAPE_SECONDS - 10:
+                        _targeted_url_search(url, name, all_chunks, session_id)
 
             except Exception as e:
                 _emit(session_id, f"❌ Failed to scrape {url[:50]}: {str(e)[:80]}")
@@ -115,18 +164,20 @@ def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, ema
         _emit(session_id, f"⚠️ No social URLs provided — skipping Phase 1")
 
     phase1_count = len(all_chunks)
-    _emit(session_id, f"📊 Phase 1 complete: {phase1_count} chunks from direct URL scraping")
+    elapsed = time.time() - scrape_start
+    _emit(session_id, f"📊 Phase 1 complete: {phase1_count} chunks in {int(elapsed)}s")
 
     # ═══════════════════════════════════════════════════════════════
-    # PHASE 2: Email & Phone OSINT Verification
+    # PHASE 2: Email & Phone OSINT (only if time remains)
     # ═══════════════════════════════════════════════════════════════
-    if email:
-        email_chunks = _osint_email(email, session_id)
-        all_chunks.extend(email_chunks)
-    
-    if phone:
-        phone_chunks = _osint_phone(phone, session_id)
-        all_chunks.extend(phone_chunks)
+    if time.time() - scrape_start < MAX_SCRAPE_SECONDS:
+        if email:
+            email_chunks = _osint_email(email, session_id)
+            all_chunks.extend(email_chunks)
+        
+        if phone:
+            phone_chunks = _osint_phone(phone, session_id)
+            all_chunks.extend(phone_chunks)
 
     # ═══════════════════════════════════════════════════════════════
     # PHASE 3: INDEX — No search engine padding. Real data only.
@@ -134,7 +185,8 @@ def scrape_and_index(name: str, twin_id: str, social_urls: List[str] = None, ema
     if all_chunks:
         _emit(session_id, f"💾 Indexing {len(all_chunks)} total chunks into vector store...")
         added = add_chunks(twin_id, all_chunks)
-        _emit(session_id, f"🎉 Data collection complete! {added} chunks indexed.")
+        total_time = int(time.time() - scrape_start)
+        _emit(session_id, f"🎉 Data collection complete! {added} chunks indexed in {total_time}s.")
         return {"chunks_indexed": added, "sources_found": len(all_chunks)}
 
     _emit(session_id, f"📭 Limited public data found — twin will be enriched from voice interview & uploaded ZIP data.")
@@ -624,10 +676,20 @@ def _scrape_url_beautifulsoup(url: str) -> str:
 
 # ── ZIP DATA EXPORT DEEP PARSER ───────────────────────────────────
 
+# Maximum chunks to index from a single uploaded file — keeps embedding fast
+MAX_UPLOAD_CHUNKS = 200
+# Maximum seconds to spend parsing a single uploaded file
+MAX_UPLOAD_PARSE_SECONDS = 60
+
 def parse_data_export(file_path: str, twin_id: str, session_id: str = None) -> Dict:
     """Parse a user's data export (.zip or .json) and index into RAG.
 
-    Supports deep parsing for:
+    PERFORMANCE LIMITS:
+    - Max 200 chunks per file (keeps embedding under 90 seconds)
+    - Max 60 seconds parsing time per file
+    - Prioritizes profile/bio/about data over bulk posts
+
+    Supports:
     - Instagram data export (posts, stories, comments, bio, DMs, reels)
     - LinkedIn data export (profile, positions, skills, recommendations)
     - Twitter/X data export (tweets, likes, bio)
@@ -649,6 +711,11 @@ def parse_data_export(file_path: str, twin_id: str, session_id: str = None) -> D
         except Exception as e:
             logger.error(f"Cannot parse {file_path}: {e}")
 
+    # ── HARD CAP: Keep only the best 200 chunks ──
+    if len(all_chunks) > MAX_UPLOAD_CHUNKS:
+        _emit(session_id, f"⚡ Capping {len(all_chunks)} chunks → {MAX_UPLOAD_CHUNKS} (smart selection)...")
+        all_chunks = _select_best_chunks(all_chunks, MAX_UPLOAD_CHUNKS)
+
     if all_chunks:
         _emit(session_id, f"💾 Indexing {len(all_chunks)} chunks from uploaded data...")
         added = add_chunks(twin_id, all_chunks)
@@ -659,21 +726,64 @@ def parse_data_export(file_path: str, twin_id: str, session_id: str = None) -> D
     return {"chunks_indexed": 0, "file": os.path.basename(file_path)}
 
 
-def _parse_zip_deep(zip_path: str, session_id: str = None) -> List[Dict]:
-    """Deep parse a ZIP — physically extract, walk EVERY folder, process ALL files.
+def _select_best_chunks(chunks: List[Dict], max_count: int) -> List[Dict]:
+    """Select the most valuable chunks from a large list.
     
-    New architecture:
+    Priority order:
+    1. Profile/bio/about data (most valuable for personality)
+    2. Posts with substantial text content
+    3. Comments, messages, other data
+    """
+    # Score each chunk by importance
+    scored = []
+    for chunk in chunks:
+        text = chunk.get('text', '').lower()
+        url = chunk.get('source_url', '').lower()
+        score = 0
+        
+        # High priority: profile, bio, about, skills, experience
+        if any(kw in url or kw in text[:100] for kw in ['profile', 'bio', 'about', 'skill', 'experience', 'position', 'education', 'recommendation']):
+            score += 100
+        # Medium: posts, stories with substantial content
+        elif any(kw in url for kw in ['post', 'story', 'content', 'tweet']):
+            score += 50
+        # Lower: messages, comments, likes
+        elif any(kw in url for kw in ['message', 'comment', 'like', 'follower', 'following']):
+            score += 10
+        
+        # Boost chunks with more text content (more useful)
+        text_len = len(chunk.get('text', ''))
+        if text_len > 200:
+            score += 20
+        elif text_len > 100:
+            score += 10
+        
+        scored.append((score, chunk))
+    
+    # Sort by score (highest first) and take top N
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [chunk for _, chunk in scored[:max_count]]
+
+
+def _parse_zip_deep(zip_path: str, session_id: str = None) -> List[Dict]:
+    """Deep parse a ZIP — with time + chunk limits for performance.
+    
+    Architecture:
     1. Extract ZIP to temp directory
-    2. Walk every folder recursively with os.walk
-    3. Route each file by extension to specialized extractors
-    4. Process media (images → EXIF, audio/video → Whisper transcription)
-    5. Cleanup temp directory
+    2. Sort files by priority (profile/bio first, bulk posts last)
+    3. Process files until chunk limit OR time limit is reached
+    4. Cleanup temp directory
+    
+    Limits:
+    - MAX_UPLOAD_PARSE_SECONDS (60s) time limit
+    - Stops file processing when enough high-quality chunks are collected
     """
     import shutil
     import tempfile
     
     chunks = []
     extract_dir = None
+    parse_start = time.time()
     
     try:
         # Step 1: Extract ZIP to temp directory
@@ -688,21 +798,45 @@ def _parse_zip_deep(zip_path: str, session_id: str = None) -> List[Dict]:
         for root, dirs, files in os.walk(extract_dir):
             for filename in files:
                 full_path = os.path.join(root, filename)
-                # Get relative path for labeling
                 rel_path = os.path.relpath(full_path, extract_dir)
                 all_files.append((full_path, rel_path))
         
         _emit(session_id, f"📁 Found {len(all_files)} files across all folders")
         
-        # Step 3: Filter to text-based files only (smart extraction)
+        # Step 3: Filter to text-based files and SORT by priority
         TEXT_EXTENSIONS = {'.html', '.json', '.txt', '.csv', '.js'}
         text_files = [(fp, rp) for fp, rp in all_files if os.path.splitext(fp)[1].lower() in TEXT_EXTENSIONS]
         media_count = len(all_files) - len(text_files)
         
+        # Sort: profile/bio/about files first, then posts, then messages/other
+        def file_priority(item):
+            rp = item[1].lower()
+            if any(kw in rp for kw in ['profile', 'bio', 'about', 'skill', 'experience', 'position', 'education']):
+                return 0  # Highest priority
+            elif any(kw in rp for kw in ['post', 'story', 'content', 'tweet', 'recommendation']):
+                return 1  # Medium
+            elif any(kw in rp for kw in ['comment', 'message', 'chat']):
+                return 2  # Lower
+            return 3  # Lowest
+        
+        text_files.sort(key=file_priority)
+        
         _emit(session_id, f"📝 Processing {len(text_files)} text files (skipping {media_count} media files)")
+        _emit(session_id, f"⏱️ Speed mode: {MAX_UPLOAD_PARSE_SECONDS}s limit, {MAX_UPLOAD_CHUNKS} chunk cap")
         
         files_processed = 0
         for i, (full_path, rel_path) in enumerate(text_files):
+            # ── TIME CHECK: Stop if we've exceeded the time limit ──
+            elapsed = time.time() - parse_start
+            if elapsed > MAX_UPLOAD_PARSE_SECONDS:
+                _emit(session_id, f"⏱️ Time limit ({MAX_UPLOAD_PARSE_SECONDS}s) — stopping with {len(chunks)} chunks")
+                break
+            
+            # ── CHUNK CHECK: Stop if we have enough ──
+            if len(chunks) >= MAX_UPLOAD_CHUNKS * 2:  # Collect up to 2x for selection later
+                _emit(session_id, f"📊 Chunk limit reached — {len(chunks)} chunks collected")
+                break
+            
             try:
                 ext = os.path.splitext(full_path)[1].lower()
                 file_chunks = []
@@ -721,14 +855,16 @@ def _parse_zip_deep(zip_path: str, session_id: str = None) -> List[Dict]:
                 if file_chunks:
                     chunks.extend(file_chunks)
                     files_processed += 1
-                    if files_processed % 50 == 0:
-                        _emit(session_id, f"  📊 Progress: {files_processed} files → {len(chunks)} chunks")
+                    if files_processed % 20 == 0:
+                        elapsed = int(time.time() - parse_start)
+                        _emit(session_id, f"  📊 Progress: {files_processed} files → {len(chunks)} chunks ({elapsed}s)")
                         
             except Exception as e:
                 logger.warning(f"Error processing {rel_path}: {e}")
                 continue
         
-        _emit(session_id, f"✅ ZIP complete: {len(chunks)} chunks from {files_processed}/{len(text_files)} text files")
+        total_time = int(time.time() - parse_start)
+        _emit(session_id, f"✅ ZIP complete: {len(chunks)} chunks from {files_processed}/{len(text_files)} files in {total_time}s")
         
     except zipfile.BadZipFile:
         logger.error(f"Invalid ZIP file: {zip_path}")
